@@ -47,34 +47,52 @@ const transformFromBackend = (records = []) => {
   return records.map(walk);
 };
 
-<ResponsiveContainer>
-  <BarChart
-    data={preview.map((r) => ({
-      name: r.name,
-      diff: r.diffNum,
-    }))}
-    layout="vertical"
-    margin={{ top: 10, right: 20, left: 40, bottom: 10 }}
-  >
-    <CartesianGrid strokeDasharray="3 3" />
+{/* CHART */}
+{tab === "chart" && (
+  <Paper variant="outlined" sx={{ p: 1, borderRadius: 2 }}>
+    {previewRecords.length === 0 ? (
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        No data to plot. Select a node to preview its subtree.
+      </Typography>
+    ) : (
+      <Box sx={{ width: '100%', height: 260 }}>
+        <ResponsiveContainer>
+          <BarChart
+            data={previewRecords.map((r) => ({
+              name: r.name,
+              diff: Number(r.amount || 0) - Number(r.comparison || 0),
+            }))}
+            layout="vertical"
+            margin={{ top: 10, right: 20, left: 40, bottom: 10 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" />
 
-    {/* Important: axis spans negative to positive */}
-    <XAxis type="number" domain={["dataMin", "dataMax"]} />
+            {/* Always start from zero */}
+            <XAxis
+              type="number"
+              domain={[0, 'dataMax']}   // <-- THIS MAKES NEGATIVE START FROM 0
+            />
+            <YAxis type="category" dataKey="name" width={160} />
 
-    <YAxis type="category" dataKey="name" width={140} />
+            {/* Zero line */}
+            <ReferenceLine x={0} stroke="#444" />
 
-    {/* Zero line */}
-    <ReferenceLine x={0} stroke="#666" strokeDasharray="3 3" />
+            <ReTooltip formatter={(v) => v.toLocaleString()} />
 
-    <ReTooltip formatter={(v) => v.toLocaleString()} />
-
-    <Bar dataKey="diff" barSize={12}>
-      {preview.map((r, i) => (
-        <Cell
-          key={i}
-          fill={r.diffNum >= 0 ? "#4caf50" : "#f44336"}
-        />
-      ))}
-    </Bar>
-  </BarChart>
-</ResponsiveContainer>
+            <Bar dataKey="diff" barSize={14}>
+              {previewRecords.map((r, i) => {
+                const diff = Number(r.amount || 0) - Number(r.comparison || 0);
+                return (
+                  <Cell
+                    key={i}
+                    fill={diff >= 0 ? "#4caf50" : "#f44336"} // green / red
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </Box>
+    )}
+  </Paper>
+)}
