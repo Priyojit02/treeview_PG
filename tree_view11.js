@@ -47,3 +47,34 @@ const transformFromBackend = (records = []) => {
   return records.map(walk);
 };
 
+<ResponsiveContainer>
+  <BarChart
+    data={preview.map((r) => ({
+      name: r.name,
+      diff: r.diffNum,
+    }))}
+    layout="vertical"
+    margin={{ top: 10, right: 20, left: 40, bottom: 10 }}
+  >
+    <CartesianGrid strokeDasharray="3 3" />
+
+    {/* Important: axis spans negative to positive */}
+    <XAxis type="number" domain={["dataMin", "dataMax"]} />
+
+    <YAxis type="category" dataKey="name" width={140} />
+
+    {/* Zero line */}
+    <ReferenceLine x={0} stroke="#666" strokeDasharray="3 3" />
+
+    <ReTooltip formatter={(v) => v.toLocaleString()} />
+
+    <Bar dataKey="diff" barSize={12}>
+      {preview.map((r, i) => (
+        <Cell
+          key={i}
+          fill={r.diffNum >= 0 ? "#4caf50" : "#f44336"}
+        />
+      ))}
+    </Bar>
+  </BarChart>
+</ResponsiveContainer>
