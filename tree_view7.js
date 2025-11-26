@@ -339,62 +339,65 @@ export default function App() {
   const [snack, setSnack] = React.useState("");
   const [error, setError] = React.useState("");
 
-  // --- Filters state: now aligned to backend variables
-  const [filters, setFilters] = React.useState({
-    companyCode: "", // maps to CompanyCode
-    ledger: "", // maps to Ledger
-    statementVersion: "", // maps to FinancialStatementVariant
-    statementType: "", // informational only (kept)
-    endPeriodMonth: "", // 1-12 -> will send endMonth
-    endPeriodYear: "", // YYYY -> will send endYear
-    compMonth: "",
+  // --- Filters state: fully expose the OData params as inputs
+  const [params, setParams] = React.useState({
+    // identifier segment P_* fields
+    P_KTOPL: "0808",
+    P_VERSN: "2000_DRAFT",
+    P_BILABTYP: "1", // fixed default
+    P_XKTOP2: "",
+    P_COMP_YEAR: "",
+    P_YEAR: "",
+    P_BUKRS: "0808",
+    P_RLDNR: "0L",
+    P_CURTP: "10",
+    P_FROM_YEARPERIOD: "", // SAP YYYYPPP e.g. 2025001
+    P_TO_YEARPERIOD: "",
+    P_FROM_COMPYEARPERIOD: "",
+    P_TO_COMPYEARPERIOD: "",
+    // friendly inputs for user convenience:
+    endYear: "",
+    endMonth: "",
     compYear: "",
-    currency: "", // free-text now (no dropdown)
+    compMonth: "",
+    // extra simple filter fields (alias)
+    CompanyCode: "",
+    Ledger: "",
+    FinancialStatementVariant: "",
   });
 
-  const [odataUrl, setOdataUrl] = React.useState(""); // backend returned odata_url
+  const [odataUrl, setOdataUrl] = React.useState("");
 
   const resultsRef = React.useRef(null);
 
-  // helper to combine month/year -> YYYY-MM (for display only)
   const combinedEndPeriod = React.useMemo(() => {
-    if (!filters.endPeriodYear || !filters.endPeriodMonth) return "";
-    const m = String(filters.endPeriodMonth).padStart(2, "0");
-    return `${filters.endPeriodYear}-${m}`;
-  }, [filters.endPeriodYear, filters.endPeriodMonth]);
+    if (!params.endYear || !params.endMonth) return "";
+    const m = String(params.endMonth).padStart(2, "0");
+    return `${params.endYear}-${m}`;
+  }, [params.endYear, params.endMonth]);
 
   const combinedCompPeriod = React.useMemo(() => {
-    if (!filters.compYear || !filters.compMonth) return "";
-    const m = String(filters.compMonth).padStart(2, "0");
-    return `${filters.compYear}-${m}`;
-  }, [filters.compYear, filters.compMonth]);
+    if (!params.compYear || !params.compMonth) return "";
+    const m = String(params.compMonth).padStart(2, "0");
+    return `${params.compYear}-${m}`;
+  }, [params.compYear, params.compMonth]);
 
-  // Fetch tree (now sends backend-friendly params: CompanyCode, Ledger, FinancialStatementVariant,
-  // endYear,endMonth, compYear,compMonth)
+  // Fetch tree: send all P_* as query params (backend uses them)
   const fetchTree = React.useCallback(async () => {
     setLoadingData(true);
     setError("");
     setOdataUrl("");
     try {
-      const params = new URLSearchParams();
+      const qp = new URLSearchParams();
 
-      // map to the backend param names the backend route expects
-      if (filters.companyCode) params.set("CompanyCode", filters.companyCode);
-      if (filters.ledger) params.set("Ledger", filters.ledger);
-      if (filters.statementVersion) params.set("FinancialStatementVariant", filters.statementVersion);
-      if (filters.currency) params.set("P_CURTP", filters.currency); // optional: raw P_CURTP
+      // forward friendly + P_* fields; backend will use whichever provided
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== "" && v !== null && v !== undefined) {
+          qp.set(k, String(v));
+        }
+      });
 
-      // send friendly endYear/endMonth & compYear/compMonth so backend can convert
-      if (filters.endPeriodYear) params.set("endYear", filters.endPeriodYear);
-      if (filters.endPeriodMonth) params.set("endMonth", filters.endPeriodMonth);
-      if (filters.compYear) params.set("compYear", filters.compYear);
-      if (filters.compMonth) params.set("compMonth", filters.compMonth);
-
-      // fixed values you told: P_BILABTYP = 1 and P_XKTOP2 empty — these are defaults on backend build_odata_url
-      // but to be explicit we can send them as P_BILABTYP=1 (optional)
-      // params.set("P_BILABTYP", "1");
-
-      const url = `${API_BASE}${API_PATH_TREE}${params.toString() ? `?${params.toString()}` : ""}`;
+      const url = `${API_BASE}${API_PATH_TREE}${qp.toString() ? `?${qp.toString()}` : ""}`;
       const res = await fetch(url, { headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
       const json = await res.json();
@@ -404,18 +407,14 @@ export default function App() {
       setFiltered({ data: transformed, expand: [] });
       setExpandedIds(flattenIds(transformed));
 
-      // Capture odata_url returned by backend (handy for debugging)
-      if (json.odata_url) {
-        setOdataUrl(json.odata_url);
-      } else {
-        setOdataUrl("");
-      }
+      if (json.odata_url) setOdataUrl(json.odata_url);
+      else setOdataUrl("");
     } catch (e) {
       setError(String(e.message || e));
     } finally {
       setLoadingData(false);
     }
-  }, [filters]);
+  }, [params]);
 
   React.useEffect(() => {
     fetchTree();
@@ -440,17 +439,29 @@ export default function App() {
     setSelectedId(null);
     setTab("result");
     setExpandedIds(flattenIds(dataTree));
-    setFilters({
-      companyCode: "",
-      ledger: "",
-      statementVersion: "",
-      statementType: "",
-      endPeriodMonth: "",
-      endPeriodYear: "",
-      compMonth: "",
+    setParams((p) => ({
+      ...p,
+      P_KTOPL: "0808",
+      P_VERSN: "2000_DRAFT",
+      P_BILABTYP: "1",
+      P_XKTOP2: "",
+      P_COMP_YEAR: "",
+      P_YEAR: "",
+      P_BUKRS: "0808",
+      P_RLDNR: "0L",
+      P_CURTP: "10",
+      P_FROM_YEARPERIOD: "",
+      P_TO_YEARPERIOD: "",
+      P_FROM_COMPYEARPERIOD: "",
+      P_TO_COMPYEARPERIOD: "",
+      endYear: "",
+      endMonth: "",
       compYear: "",
-      currency: "",
-    });
+      compMonth: "",
+      CompanyCode: "",
+      Ledger: "",
+      FinancialStatementVariant: "",
+    }));
     setOdataUrl("");
   };
 
@@ -501,16 +512,14 @@ export default function App() {
       const payload = {
         scope,
         nodes: previewRecords,
-        // include the filters that were used to fetch the tree
         filters: {
-          CompanyCode: filters.companyCode || null,
-          Ledger: filters.ledger || null,
-          FinancialStatementVariant: filters.statementVersion || null,
-          currency: filters.currency || null,
-          endYear: filters.endPeriodYear || null,
-          endMonth: filters.endPeriodMonth || null,
-          compYear: filters.compYear || null,
-          compMonth: filters.compMonth || null,
+          CompanyCode: params.CompanyCode || null,
+          Ledger: params.Ledger || null,
+          FinancialStatementVariant: params.FinancialStatementVariant || null,
+          endYear: params.endYear || null,
+          endMonth: params.endMonth || null,
+          compYear: params.compYear || null,
+          compMonth: params.compMonth || null,
         },
       };
 
@@ -567,6 +576,19 @@ export default function App() {
     window.open(odataUrl, "_blank");
   };
 
+  // helper to render many compact inputs (two-column grid on wide screens)
+  const ParamInput = ({ name, label, ...rest }) => (
+    <TextField
+      size="small"
+      label={label || name}
+      value={params[name] ?? ""}
+      onChange={(e) => setParams((s) => ({ ...s, [name]: e.target.value }))}
+      InputProps={{ sx: { fontSize: 13 } }}
+      sx={{ minWidth: 120, flex: "1 1 140px" }}
+      {...rest}
+    />
+  );
+
   return (
     <Box
       sx={{
@@ -578,18 +600,19 @@ export default function App() {
         bgcolor: "#f7f7fb",
       }}
     >
-      <Card sx={{ width: "100%", maxWidth: { xs: 540, sm: 1100, md: 1320 }, borderRadius: 4, boxShadow: 6 }}>
+      <Card sx={{ width: "100%", maxWidth: { xs: 900, sm: 1200, md: 1400 }, borderRadius: 4, boxShadow: 6 }}>
         <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
           <Typography variant={isSmall ? "h6" : "h5"} gutterBottom>
             Financial Statement Tree — SAP View + AI Actions
           </Typography>
           <Typography variant="body2" sx={{ mb: 2, opacity: 0.8 }}>
-            Left: SAP financial hierarchy. Right: actions using your backend (LLM + analysis). Select a node to enable actions.
+            Enter OData parameters below (all P_* fields are exposed). Click <b>Apply filters</b> to call the backend.
           </Typography>
 
           <Grid container spacing={2}>
+            {/* LEFT: Tree */}
             <Grid item xs={12} md={6} lg={5}>
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} alignItems={{ xs: "stretch", sm: "center" }} sx={{ mb: 1.5 }}>
+              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.5 }}>
                 <TextField
                   size="small"
                   placeholder={loadingData ? "Loading from backend…" : "Search (item/account/name)…"}
@@ -601,10 +624,10 @@ export default function App() {
                 />
                 <Stack direction="row" spacing={1}>
                   <Button variant="outlined" startIcon={<UnfoldMoreIcon />} onClick={expandAll} disabled={loadingData}>
-                    Expand all
+                    Expand
                   </Button>
                   <Button variant="outlined" startIcon={<UnfoldLessIcon />} onClick={collapseAll} disabled={loadingData}>
-                    Collapse all
+                    Collapse
                   </Button>
                   <Button variant="contained" onClick={reset} disabled={loadingData}>
                     Reset
@@ -614,7 +637,7 @@ export default function App() {
 
               <Divider sx={{ mb: 2 }} />
 
-              <Box sx={{ maxHeight: { xs: 360, sm: 520, md: 620 }, overflowY: "auto", px: 0.5, bgcolor: alpha(theme.palette.primary.light, 0.02), borderRadius: 2 }}>
+              <Box sx={{ minHeight: 360, /* allow the tree to grow; no internal big scroll */ overflowY: "auto", px: 0.5, bgcolor: alpha(theme.palette.primary.light, 0.02), borderRadius: 2 }}>
                 {loadingData ? (
                   <Stack alignItems="center" justifyContent="center" sx={{ py: 8 }}>
                     <CircularProgress />
@@ -641,125 +664,57 @@ export default function App() {
               </Box>
             </Grid>
 
-            {/* RIGHT: Filters, Actions & results */}
+            {/* RIGHT: Advanced Params + Actions */}
             <Grid item xs={12} md={6} lg={7}>
-              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, height: "100%" }}>
-                {/* Filters row: CompanyCode + Ledger + Month/Year boxes */}
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                  <TextField
-                    size="small"
-                    label="Company code (CompanyCode)"
-                    value={filters.companyCode}
-                    onChange={(e) => setFilters((s) => ({ ...s, companyCode: e.target.value }))}
-                    sx={{ minWidth: 140 }}
-                  />
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+                {/* Advanced OData params laid out in responsive Grid */}
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Advanced OData parameters (P_* fields)</Typography>
 
-                  <TextField
-                    size="small"
-                    label="Ledger (Ledger)"
-                    value={filters.ledger}
-                    onChange={(e) => setFilters((s) => ({ ...s, ledger: e.target.value }))}
-                    sx={{ minWidth: 140 }}
-                  />
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: "repeat(3,1fr)" }, gap: 10, mb: 1 }}>
+                  <ParamInput name="P_KTOPL" label="P_KTOPL (Company code)" />
+                  <ParamInput name="P_VERSN" label="P_VERSN (Statement version)" />
+                  <ParamInput name="P_BILABTYP" label="P_BILABTYP" />
+                  <ParamInput name="P_XKTOP2" label="P_XKTOP2" />
+                  <ParamInput name="P_COMP_YEAR" label="P_COMP_YEAR" />
+                  <ParamInput name="P_YEAR" label="P_YEAR (end year)" />
+                  <ParamInput name="P_BUKRS" label="P_BUKRS" />
+                  <ParamInput name="P_RLDNR" label="P_RLDNR (Ledger)" />
+                  <ParamInput name="P_CURTP" label="P_CURTP (Currency code)" />
+                  <ParamInput name="P_FROM_YEARPERIOD" label="P_FROM_YEARPERIOD (YYYYPPP)" />
+                  <ParamInput name="P_TO_YEARPERIOD" label="P_TO_YEARPERIOD (YYYYPPP)" />
+                  <ParamInput name="P_FROM_COMPYEARPERIOD" label="P_FROM_COMPYEARPERIOD" />
+                  <ParamInput name="P_TO_COMPYEARPERIOD" label="P_TO_COMPYEARPERIOD" />
+                </Box>
 
-                  <TextField
-                    size="small"
-                    label="Statement version (FinancialStatementVariant)"
-                    value={filters.statementVersion}
-                    onChange={(e) => setFilters((s) => ({ ...s, statementVersion: e.target.value }))}
-                    sx={{ minWidth: 180 }}
-                  />
+                <Divider sx={{ mb: 1 }} />
 
-                  <FormControl size="small" sx={{ minWidth: 160 }}>
-                    <InputLabel>Statement type (info)</InputLabel>
-                    <Select
-                      label="Statement type"
-                      value={filters.statementType}
-                      onChange={(e) => setFilters((s) => ({ ...s, statementType: e.target.value }))}
-                    >
-                      <MenuItem value="">(any)</MenuItem>
-                      <MenuItem value="Balance Sheet">Balance Sheet</MenuItem>
-                      <MenuItem value="Profit & Loss">Profit & Loss</MenuItem>
-                    </Select>
-                  </FormControl>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Convenience (friendly) fields</Typography>
+                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center", mb: 1 }}>
+                  <TextField size="small" label="endYear (YYYY)" value={params.endYear} onChange={(e) => setParams(s => ({...s, endYear: e.target.value}))} sx={{ minWidth: 110 }} />
+                  <TextField size="small" label="endMonth (1-12)" value={params.endMonth} onChange={(e) => setParams(s => ({...s, endMonth: e.target.value}))} sx={{ minWidth: 110 }} />
+                  <TextField size="small" label="compYear" value={params.compYear} onChange={(e) => setParams(s => ({...s, compYear: e.target.value}))} sx={{ minWidth: 110 }} />
+                  <TextField size="small" label="compMonth" value={params.compMonth} onChange={(e) => setParams(s => ({...s, compMonth: e.target.value}))} sx={{ minWidth: 110 }} />
+                  <TextField size="small" label="CompanyCode (filter)" value={params.CompanyCode} onChange={(e) => setParams(s => ({...s, CompanyCode: e.target.value}))} sx={{ minWidth: 120 }} />
+                  <TextField size="small" label="Ledger (filter)" value={params.Ledger} onChange={(e) => setParams(s => ({...s, Ledger: e.target.value}))} sx={{ minWidth: 110 }} />
+                  <TextField size="small" label="FinancialStatementVariant" value={params.FinancialStatementVariant} onChange={(e) => setParams(s => ({...s, FinancialStatementVariant: e.target.value}))} sx={{ minWidth: 140 }} />
+                </Box>
 
-                  {/* End Period: Month + Year separate boxes */}
-                  <FormControl size="small" sx={{ minWidth: 110 }}>
-                    <InputLabel>End month</InputLabel>
-                    <Select
-                      label="End month"
-                      value={filters.endPeriodMonth || ""}
-                      onChange={(e) => setFilters((s) => ({ ...s, endPeriodMonth: e.target.value }))}
-                    >
-                      <MenuItem value="">(mm)</MenuItem>
-                      {[...Array(12)].map((_, i) => (
-                        <MenuItem key={i + 1} value={i + 1}>
-                          {i + 1}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Button variant="contained" onClick={fetchTree} sx={{ minWidth: 140 }}>Apply filters</Button>
+                  <Button variant="outlined" onClick={() => { setParams(p => ({...p, P_BILABTYP: "1", P_XKTOP2: "" })); setSnack("Bill typ reset to 1; XKTOP2 cleared"); }}>Reset P_BILABTYP/XKTOP2</Button>
 
-                  <TextField
-                    size="small"
-                    label="End year (YYYY)"
-                    value={filters.endPeriodYear || ""}
-                    onChange={(e) => setFilters((s) => ({ ...s, endPeriodYear: e.target.value }))}
-                    sx={{ minWidth: 100 }}
-                  />
+                  <Box sx={{ flex: 1 }} />
 
-                  {/* Comparison Period: Month + Year */}
-                  <FormControl size="small" sx={{ minWidth: 120 }}>
-                    <InputLabel>Comp month</InputLabel>
-                    <Select
-                      label="Comp month"
-                      value={filters.compMonth || ""}
-                      onChange={(e) => setFilters((s) => ({ ...s, compMonth: e.target.value }))}
-                    >
-                      <MenuItem value="">(mm)</MenuItem>
-                      {[...Array(12)].map((_, i) => (
-                        <MenuItem key={i + 1} value={i + 1}>
-                          {i + 1}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-
-                  <TextField
-                    size="small"
-                    label="Comp year (YYYY)"
-                    value={filters.compYear || ""}
-                    onChange={(e) => setFilters((s) => ({ ...s, compYear: e.target.value }))}
-                    sx={{ minWidth: 100 }}
-                  />
-
-                  {/* Currency now free-text as requested */}
-                  <TextField
-                    size="small"
-                    label="Currency (P_CURTP)"
-                    value={filters.currency || ""}
-                    onChange={(e) => setFilters((s) => ({ ...s, currency: e.target.value }))}
-                    sx={{ minWidth: 120 }}
-                    helperText="Type currency code (e.g. GBP) — no dropdown"
-                  />
-
-                  <Button variant="outlined" onClick={fetchTree} sx={{ ml: "auto" }}>
-                    Apply filters
-                  </Button>
+                  {odataUrl && (
+                    <>
+                      <TextField size="small" value={odataUrl} sx={{ flex: 1 }} InputProps={{ readOnly: true }} />
+                      <Tooltip title="Copy OData URL"><IconButton onClick={copyOdataUrl}><ContentCopyIcon /></IconButton></Tooltip>
+                      <Tooltip title="Open OData URL"><IconButton onClick={openOdataUrl}><OpenInNewIcon /></IconButton></Tooltip>
+                    </>
+                  )}
                 </Stack>
 
-                {/* show odata url + copy/open buttons when backend returns it */}
-                {odataUrl && (
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                    <TextField size="small" value={odataUrl} fullWidth InputProps={{ readOnly: true }} />
-                    <Tooltip title="Copy OData URL">
-                      <IconButton onClick={copyOdataUrl}><ContentCopyIcon /></IconButton>
-                    </Tooltip>
-                    <Tooltip title="Open OData URL in new tab">
-                      <IconButton onClick={openOdataUrl}><OpenInNewIcon /></IconButton>
-                    </Tooltip>
-                  </Stack>
-                )}
+                <Divider sx={{ mb: 1 }} />
 
                 <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
                   <Typography variant="subtitle1">Actions</Typography>
@@ -773,14 +728,7 @@ export default function App() {
                   <Tooltip title="Call backend LLM to summarize selected scope">
                     <span>
                       <Button variant="contained" onClick={handleSummarize} disabled={!selectedNode || loadingAction}>
-                        {loadingAction ? (
-                          <>
-                            <CircularProgress size={18} sx={{ mr: 1 }} />
-                            Summarizing…
-                          </>
-                        ) : (
-                          "Summarize"
-                        )}
+                        {loadingAction ? (<><CircularProgress size={18} sx={{ mr: 1 }} />Summarizing…</>) : ("Summarize")}
                       </Button>
                     </span>
                   </Tooltip>
