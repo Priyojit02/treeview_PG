@@ -54,12 +54,12 @@ import {
   CartesianGrid,
 } from "recharts";
 
-// ------------- API CONFIG -------------
+// =================== API CONFIG ===================
 const API_BASE = "http://127.0.0.1:8000";
-const API_PATH_TREE = "/financial-statements";
-const API_PATH_LLM = "/summarize_tree";
+const API_PATH_TREE = "/financial-statements"; // GET (filters accepted as query params)
+const API_PATH_LLM = "/summarize_tree"; // POST
 
-// ------------- Utils (kept small) -------------
+// =================== HELPERS (unchanged core logic) ===================
 const flattenIds = (nodes) => {
   const all = [];
   const walk = (n) => {
@@ -74,9 +74,11 @@ const flattenIds = (nodes) => {
 const searchTree = (nodes, query) => {
   if (!query) return { data: nodes, expand: [] };
   const q = query.toLowerCase();
+
   const filterNode = (node) => {
     const kids = node.children || [];
     const filteredKids = kids.map(filterNode).filter(Boolean);
+
     const hay = [
       node.name,
       node.code,
@@ -89,13 +91,17 @@ const searchTree = (nodes, query) => {
       .map(String)
       .join(" ")
       .toLowerCase();
+
     const matchesSelf = hay.includes(q);
+
     if (matchesSelf || filteredKids.length) {
       return { ...node, children: filteredKids };
     }
     return null;
   };
+
   const filtered = (nodes || []).map(filterNode).filter(Boolean);
+
   const expandIds = [];
   const collectParents = (node) => {
     if (node.children?.length) {
@@ -162,10 +168,13 @@ const localSummary = (scopeRecords) => {
     .map((r) => r.name)
     .join(", ");
   const keys = uniqueKeys(scopeRecords).length;
+
   return (
     `Items: ${scopeRecords.length}. ` +
-    `Types: ${Object.entries(kinds).map(([t, c]) => `${t}:${c}`).join(" | ")}. ` +
-    `Columns: ${keys}. ` +
+    `Types: ${Object.entries(kinds)
+      .map(([t, c]) => `${t}:${c}`)
+      .join(" | ")}. ` +
+    `Columns (unique keys): ${keys}. ` +
     `Examples: ${names}${scopeRecords.length > 6 ? "…" : ""}`
   );
 };
@@ -212,10 +221,11 @@ const transformFromBackend = (records = []) => {
     level: r.FinStatementHierarchyLevelVal || undefined,
     children: (r.Children || []).map(walk),
   });
+
   return (records || []).map(walk);
 };
 
-// ------------- Tree item renderer -------------
+// =================== Tree Item Renderer ===================
 function RenderItem({ node, hoveredId, setHoveredId, selectedId }) {
   const theme = useTheme();
   const kids = node.children || [];
@@ -270,7 +280,10 @@ function RenderItem({ node, hoveredId, setHoveredId, selectedId }) {
             backgroundColor: alpha(theme.palette.primary.main, 0.06),
           }),
           ...(isSelected && {
-            boxShadow: `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.35)}`,
+            boxShadow: `inset 0 0 0 2px ${alpha(
+              theme.palette.primary.main,
+              0.35
+            )}`,
           }),
         },
         "& .MuiTreeItem-content:hover": {
@@ -296,7 +309,7 @@ function RenderItem({ node, hoveredId, setHoveredId, selectedId }) {
   );
 }
 
-// ------------- MAIN APP -------------
+// =================== MAIN APP ===================
 export default function App() {
   const theme = useTheme();
   const isSmall = useMediaQuery(theme.breakpoints.down("sm"));
@@ -313,7 +326,7 @@ export default function App() {
   const [loadingAction, setLoadingAction] = React.useState(false);
 
   const [tab, setTab] = React.useState("result");
-  const [scope, setScope] = React.useState("subtree");
+  const [scope, setScope] = React.useState("subtree"); // 'node' | 'subtree'
 
   const [summary, setSummary] = React.useState("");
   const [columnCount, setColumnCount] = React.useState(0);
@@ -322,39 +335,86 @@ export default function App() {
   const [snack, setSnack] = React.useState("");
   const [error, setError] = React.useState("");
 
-  // params: visible fields are compact; hidden/defaults applied before calling backend
+  // --- Filters state: fully expose the OData params as inputs but hide some
   const [params, setParams] = React.useState({
-    CompanyCode: "0808", // visible, drives P_KTOPL and P_BUKRS
+    // P_KTOPL visible
+    P_KTOPL: "0808",
+    // P_BUKRS exists but // NOT shown in UI; it will autcatch to P_KTOPL
+    P_BUKRS: "0808",
+    // visible
     P_VERSN: "2000_DRAFT",
-    // P_BILABTYP and P_XKTOP2 are hidden and forced below
-    // P_RLDNR hidden (ledger default)
+    P_COMP_YEAR: "",
+    P_YEAR: "",
+    // Hidden/fixed:
+    P_BILABTYP: "1", // fixed default (hidden)
+    P_XKTOP2: "", // fixed empty (hidden)
+    P_RLDNR: "0L", // ledger default (hidden)
+    P_CURTP: "10",
+    P_FROM_YEARPERIOD: "", // SAP YYYYPPP e.g. 2025001
+    P_TO_YEARPERIOD: "",
+    P_FROM_COMPYEARPERIOD: "",
+    P_TO_COMPYEARPERIOD: "",
+    // friendly inputs for user convenience:
     endYear: "",
     endMonth: "",
     compYear: "",
     compMonth: "",
-    P_CURTP: "10",
-    // optional manual SAP style overrides (YYYYPPP)
-    P_FROM_YEARPERIOD: "",
-    P_TO_YEARPERIOD: "",
-    P_FROM_COMPYEARPERIOD: "",
-    P_TO_COMPYEARPERIOD: "",
+    // extra simple filter fields (alias)
+    CompanyCode: "0808", // visible; will sync to P_KTOPL & P_BUKRS
+    Ledger: "",
+    FinancialStatementVariant: "",
   });
 
   const [odataUrl, setOdataUrl] = React.useState("");
 
   const resultsRef = React.useRef(null);
 
-  // Compose friendly periods for display/preview (not required to send because we send both friendly & P_ fields)
+  const combinedEndPeriod = React.useMemo(() => {
+    if (!params.endYear || !params.endMonth) return "";
+    const m = String(params.endMonth).padStart(2, "0");
+    return `${params.endYear}-${m}`;
+  }, [params.endYear, params.endMonth]);
+
+  const combinedCompPeriod = React.useMemo(() => {
+    if (!params.compYear || !params.compMonth) return "";
+    const m = String(params.compMonth).padStart(2, "0");
+    return `${params.compYear}-${m}`;
+  }, [params.compYear, params.compMonth]);
+
+  // ensure P_BUKRS sync with P_KTOPL or CompanyCode
+  React.useEffect(() => {
+    // Whenever P_KTOPL or CompanyCode changes keep P_BUKRS same
+    setParams((p) => {
+      const newK = p.P_KTOPL || p.CompanyCode || "";
+      if (p.P_BUKRS !== newK) {
+        return { ...p, P_BUKRS: newK, CompanyCode: newK, P_KTOPL: newK };
+      }
+      return p;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount to sync initial values
+
+  // whenever CompanyCode changes update P_KTOPL/P_BUKRS
+  const setCompanyCode = (val) => {
+    setParams((p) => ({ ...p, CompanyCode: val, P_KTOPL: val, P_BUKRS: val }));
+  };
+
+  // whenever P_KTOPL changed manually update P_BUKRS and CompanyCode
+  const setP_KTOPL = (val) => {
+    setParams((p) => ({ ...p, P_KTOPL: val, P_BUKRS: val, CompanyCode: val }));
+  };
+
+  // normalize month simple helper
   const normalizeMonth = (m) => {
     if (!m && m !== 0) return "";
-    const mm = String(m).replace(/^0+/, "") || m; // allow "01" or "1"
+    const mm = String(m).replace(/^0+/, "") || m;
     const iv = parseInt(mm, 10);
     if (Number.isNaN(iv)) return "";
     if (iv < 1 || iv > 12) return "";
     return String(iv).padStart(2, "0");
   };
 
-  // Build query and call backend
+  // Fetch tree: send all P_* as query params (backend uses them)
   const fetchTree = React.useCallback(async () => {
     setLoadingData(true);
     setError("");
@@ -362,38 +422,29 @@ export default function App() {
     try {
       const qp = new URLSearchParams();
 
-      // Hidden/default mappings:
-      // P_BILABTYP = "1", P_XKTOP2 = "" (hidden)
-      // P_RLDNR (ledger) default to "0L" (hidden)
-      // P_KTOPL and P_BUKRS come from CompanyCode
-      const company = (params.CompanyCode || "").trim();
-      if (company) {
-        qp.set("P_KTOPL", company);
-        qp.set("P_BUKRS", company);
-      }
+      // Prepare a shallow copy to ensure hidden fields exist
+      const send = { ...params };
 
-      // explicit visible params
-      if (params.P_VERSN) qp.set("P_VERSN", params.P_VERSN);
-      if (params.P_CURTP) qp.set("P_CURTP", params.P_CURTP);
+      // Ensure P_BUKRS equals P_KTOPL
+      if (!send.P_BUKRS && send.P_KTOPL) send.P_BUKRS = send.P_KTOPL;
+      if (!send.P_KTOPL && send.CompanyCode) send.P_KTOPL = send.CompanyCode;
 
-      // optional manual SAP-style fields (if user wants to override)
-      if (params.P_FROM_YEARPERIOD) qp.set("P_FROM_YEARPERIOD", params.P_FROM_YEARPERIOD);
-      if (params.P_TO_YEARPERIOD) qp.set("P_TO_YEARPERIOD", params.P_TO_YEARPERIOD);
-      if (params.P_FROM_COMPYEARPERIOD) qp.set("P_FROM_COMPYEARPERIOD", params.P_FROM_COMPYEARPERIOD);
-      if (params.P_TO_COMPYEARPERIOD) qp.set("P_TO_COMPYEARPERIOD", params.P_TO_COMPYEARPERIOD);
+      // Normalize months to two-digit friendly form (endMonth/compMonth)
+      if (send.endMonth) send.endMonth = normalizeMonth(send.endMonth);
+      if (send.compMonth) send.compMonth = normalizeMonth(send.compMonth);
 
-      // friendly fields (backend will compute SAP period if present)
-      if (params.endYear) qp.set("endYear", params.endYear);
-      if (params.endMonth) qp.set("endMonth", normalizeMonth(params.endMonth));
-      if (params.compYear) qp.set("compYear", params.compYear);
-      if (params.compMonth) qp.set("compMonth", normalizeMonth(params.compMonth));
+      // Always include hidden defaults explicitly
+      send.P_BILABTYP = "1";
+      send.P_XKTOP2 = ""; // forced empty as requested
+      if (!send.P_RLDNR) send.P_RLDNR = "0L";
 
-      // forced hidden values (explicitly send so backend receives them)
-      qp.set("P_BILABTYP", "1");
-      qp.set("P_XKTOP2", ""); // empty
-      qp.set("P_RLDNR", "0L"); // default ledger
+      // Add non-empty values to querystring
+      Object.entries(send).forEach(([k, v]) => {
+        if (v !== "" && v !== null && v !== undefined) {
+          qp.set(k, String(v));
+        }
+      });
 
-      // call backend
       const url = `${API_BASE}${API_PATH_TREE}${qp.toString() ? `?${qp.toString()}` : ""}`;
       const res = await fetch(url, { headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
@@ -403,8 +454,9 @@ export default function App() {
       setDataTree(transformed);
       setFiltered({ data: transformed, expand: [] });
       setExpandedIds(flattenIds(transformed));
+
       if (json.odata_url) setOdataUrl(json.odata_url);
-      else setOdataUrl(url); // if backend didn't return odata_url, show the requested URL for debugging
+      else setOdataUrl(url); // helpful for debugging
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -437,17 +489,26 @@ export default function App() {
     setExpandedIds(flattenIds(dataTree));
     setParams((p) => ({
       ...p,
-      CompanyCode: "0808",
+      P_KTOPL: "0808",
+      P_BUKRS: "0808",
       P_VERSN: "2000_DRAFT",
-      endYear: "",
-      endMonth: "",
-      compYear: "",
-      compMonth: "",
+      P_BILABTYP: "1",
+      P_XKTOP2: "",
+      P_COMP_YEAR: "",
+      P_YEAR: "",
+      P_RLDNR: "0L",
       P_CURTP: "10",
       P_FROM_YEARPERIOD: "",
       P_TO_YEARPERIOD: "",
       P_FROM_COMPYEARPERIOD: "",
       P_TO_COMPYEARPERIOD: "",
+      endYear: "",
+      endMonth: "",
+      compYear: "",
+      compMonth: "",
+      CompanyCode: "0808",
+      Ledger: "",
+      FinancialStatementVariant: "",
     }));
     setOdataUrl("");
   };
@@ -479,45 +540,49 @@ export default function App() {
 
   const tableColumns = React.useMemo(() => uniqueKeys(previewRecords), [previewRecords]);
 
-  // chart data
+  // compute chart data from previewRecords
   const chartData = React.useMemo(() => {
     return previewRecords.map((r) => {
       const amount = Number((r.amount || "").replace(/[^0-9.-]+/g, "")) || 0;
       const comp = Number((r.comparison || "").replace(/[^0-9.-]+/g, "")) || 0;
-      const diff = amount - comp;
+      const diff = amount - comp; // signed difference
       return { name: r.name || r.id, diff, id: r.id };
     });
   }, [previewRecords]);
 
-  // LLM call
   const handleSummarize = async () => {
     if (!selectedNode) return setError("Click a row on the left to select it first.");
     setLoadingAction(true);
     setError("");
     setTab("result");
+
     try {
       const payload = {
         scope,
         nodes: previewRecords,
         filters: {
           CompanyCode: params.CompanyCode || null,
-          P_VERSN: params.P_VERSN || null,
+          Ledger: params.Ledger || null,
+          FinancialStatementVariant: params.FinancialStatementVariant || null,
           endYear: params.endYear || null,
           endMonth: params.endMonth ? normalizeMonth(params.endMonth) : null,
           compYear: params.compYear || null,
           compMonth: params.compMonth ? normalizeMonth(params.compMonth) : null,
         },
       };
+
       const res = await fetch(`${API_BASE}${API_PATH_LLM}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
       if (!res.ok) {
         const local = localSummary(previewRecords);
         setSummary(local + " (LLM call failed)");
         throw new Error(`LLM API failed: ${res.status}`);
       }
+
       const data = await res.json();
       setSummary(data.summary || "(No summary returned)");
       setSnack("Summary generated");
@@ -534,6 +599,7 @@ export default function App() {
     setLoadingAction(true);
     setError("");
     setTab("result");
+
     try {
       const keys = uniqueKeys(previewRecords);
       setColumnCount(keys.length);
@@ -547,6 +613,7 @@ export default function App() {
     }
   };
 
+  // copy / open OData URL helpers
   const copyOdataUrl = async () => {
     if (!odataUrl) return;
     await navigator.clipboard.writeText(odataUrl);
@@ -558,14 +625,15 @@ export default function App() {
   };
 
   // small param input helper (compact)
-  const ParamInput = ({ name, label, xs = 4 }) => (
+  const ParamInput = ({ name, label, ...rest }) => (
     <TextField
       size="small"
       label={label || name}
       value={params[name] ?? ""}
       onChange={(e) => setParams((s) => ({ ...s, [name]: e.target.value }))}
       InputProps={{ sx: { fontSize: 13 } }}
-      sx={{ minWidth: 120, flex: `1 1 ${100 / xs}%` }}
+      sx={{ minWidth: 120, flex: "1 1 140px" }}
+      {...rest}
     />
   );
 
@@ -586,16 +654,16 @@ export default function App() {
             Financial Statement Tree — SAP View + AI Actions
           </Typography>
           <Typography variant="body2" sx={{ mb: 2, opacity: 0.8 }}>
-            Compact OData parameter editor. Fill inputs below and click <b>Apply filters</b>. Hidden defaults: P_BILABTYP=1, P_XKTOP2 empty, ledger="0L".
+            Enter OData parameters below (compact). P_BILABTYP=1 and P_XKTOP2 empty are hidden and applied automatically. P_BUKRS is auto-filled from P_KTOPL / CompanyCode.
           </Typography>
 
           <Grid container spacing={2}>
-            {/* LEFT: tree */}
+            {/* LEFT: Tree */}
             <Grid item xs={12} md={6} lg={5}>
-              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1 }}>
+              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.5 }}>
                 <TextField
                   size="small"
-                  placeholder={loadingData ? "Loading…" : "Search (item/account/name) …"}
+                  placeholder={loadingData ? "Loading from backend…" : "Search (item/account/name)…"}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   InputProps={{ startAdornment: <SearchIcon sx={{ mr: 1, opacity: 0.7 }} /> }}
@@ -621,9 +689,7 @@ export default function App() {
                 {loadingData ? (
                   <Stack alignItems="center" justifyContent="center" sx={{ py: 8 }}>
                     <CircularProgress />
-                    <Typography variant="body2" sx={{ mt: 1.5, color: "text.secondary" }}>
-                      Fetching from backend…
-                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 1.5, color: "text.secondary" }}>Fetching from backend…</Typography>
                   </Stack>
                 ) : (
                   <SimpleTreeView
@@ -646,43 +712,56 @@ export default function App() {
               </Box>
             </Grid>
 
-            {/* RIGHT: compact params + actions */}
+            {/* RIGHT: Advanced Params + Actions (compact 2-col layout) */}
             <Grid item xs={12} md={6} lg={7}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-                {/* Row-group 1 (Company + Version + CURTP) */}
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1 }}>
+                {/* Compact P_* inputs laid out in two columns on md+ */}
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Key parameters (compact)</Typography>
+
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 8, mb: 1 }}>
+                  {/* P_KTOPL visible */}
                   <TextField
                     size="small"
-                    label="CompanyCode (P_KTOPL / P_BUKRS)"
-                    value={params.CompanyCode}
-                    onChange={(e) => setParams((s) => ({ ...s, CompanyCode: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
+                    label="P_KTOPL (company code)"
+                    value={params.P_KTOPL}
+                    onChange={(e) => setP_KTOPL(e.target.value)}
+                    sx={{ minWidth: 120 }}
                   />
+
+                  {/* P_VERSN visible */}
                   <TextField
                     size="small"
-                    label="Statement version (P_VERSN)"
+                    label="P_VERSN (statement version)"
                     value={params.P_VERSN}
                     onChange={(e) => setParams((s) => ({ ...s, P_VERSN: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
+                    sx={{ minWidth: 120 }}
                   />
+
+                  {/* P_CURTP visible */}
                   <TextField
                     size="small"
-                    label="Currency code (P_CURTP)"
+                    label="P_CURTP (currency code - free text)"
                     value={params.P_CURTP}
                     onChange={(e) => setParams((s) => ({ ...s, P_CURTP: e.target.value }))}
-                    sx={{ minWidth: 100, flex: "1 1 120px" }}
-                    placeholder="e.g. 10"
+                    sx={{ minWidth: 120 }}
                   />
-                </Box>
 
-                {/* Row-group 2 (friendly end/comparison) */}
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1 }}>
+                  {/* CompanyCode (alias) - keeps in sync */}
+                  <TextField
+                    size="small"
+                    label="CompanyCode (alias)"
+                    value={params.CompanyCode}
+                    onChange={(e) => setCompanyCode(e.target.value)}
+                    sx={{ minWidth: 120 }}
+                  />
+
+                  {/* Friendly end/comparison inputs (row 2) */}
                   <TextField
                     size="small"
                     label="endYear (YYYY)"
                     value={params.endYear}
                     onChange={(e) => setParams((s) => ({ ...s, endYear: e.target.value }))}
-                    sx={{ minWidth: 110, flex: "1 1 110px" }}
+                    sx={{ minWidth: 110 }}
                     placeholder="2025"
                   />
                   <TextField
@@ -690,7 +769,7 @@ export default function App() {
                     label="endMonth (1-12)"
                     value={params.endMonth}
                     onChange={(e) => setParams((s) => ({ ...s, endMonth: e.target.value }))}
-                    sx={{ minWidth: 110, flex: "1 1 110px" }}
+                    sx={{ minWidth: 110 }}
                     placeholder="1"
                   />
                   <TextField
@@ -698,7 +777,7 @@ export default function App() {
                     label="compYear"
                     value={params.compYear}
                     onChange={(e) => setParams((s) => ({ ...s, compYear: e.target.value }))}
-                    sx={{ minWidth: 110, flex: "1 1 110px" }}
+                    sx={{ minWidth: 110 }}
                     placeholder="2024"
                   />
                   <TextField
@@ -706,19 +785,21 @@ export default function App() {
                     label="compMonth (1-12)"
                     value={params.compMonth}
                     onChange={(e) => setParams((s) => ({ ...s, compMonth: e.target.value }))}
-                    sx={{ minWidth: 110, flex: "1 1 110px" }}
+                    sx={{ minWidth: 110 }}
                     placeholder="1"
                   />
                 </Box>
 
-                {/* Row-group 3 (manual SAP period overrides) */}
+                <Divider sx={{ mb: 1 }} />
+
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Optional SAP-period overrides (manual)</Typography>
                 <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 1 }}>
                   <TextField
                     size="small"
                     label="P_FROM_YEARPERIOD (YYYYPPP)"
                     value={params.P_FROM_YEARPERIOD}
                     onChange={(e) => setParams((s) => ({ ...s, P_FROM_YEARPERIOD: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
+                    sx={{ minWidth: 140 }}
                     placeholder="2025001"
                   />
                   <TextField
@@ -726,38 +807,19 @@ export default function App() {
                     label="P_TO_YEARPERIOD (YYYYPPP)"
                     value={params.P_TO_YEARPERIOD}
                     onChange={(e) => setParams((s) => ({ ...s, P_TO_YEARPERIOD: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
-                    placeholder="2025010"
-                  />
-                  <TextField
-                    size="small"
-                    label="P_FROM_COMPYEARPERIOD"
-                    value={params.P_FROM_COMPYEARPERIOD}
-                    onChange={(e) => setParams((s) => ({ ...s, P_FROM_COMPYEARPERIOD: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
-                    placeholder="2024001"
-                  />
-                  <TextField
-                    size="small"
-                    label="P_TO_COMPYEARPERIOD"
-                    value={params.P_TO_COMPYEARPERIOD}
-                    onChange={(e) => setParams((s) => ({ ...s, P_TO_COMPYEARPERIOD: e.target.value }))}
-                    sx={{ minWidth: 140, flex: "1 1 160px" }}
-                    placeholder="2024010"
+                    sx={{ minWidth: 140 }}
+                    placeholder="2025012"
                   />
                 </Box>
 
                 <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                  <Button variant="contained" onClick={fetchTree} sx={{ minWidth: 140 }}>
-                    Apply filters
-                  </Button>
-
+                  <Button variant="contained" onClick={fetchTree} sx={{ minWidth: 140 }}>Apply filters</Button>
                   <Button
                     variant="outlined"
                     onClick={() => {
-                      // reset the hidden defaults only if needed
-                      setParams((p) => ({ ...p, P_BILABTYP: "1", P_XKTOP2: "" }));
-                      setSnack("Hidden defaults applied (P_BILABTYP=1, P_XKTOP2 cleared)");
+                      // re-apply hidden defaults
+                      setParams((p) => ({ ...p, P_BILABTYP: "1", P_XKTOP2: "", P_RLDNR: "0L" }));
+                      setSnack("Hidden defaults reapplied: P_BILABTYP=1, P_XKTOP2 cleared, P_RLDNR=0L");
                     }}
                   >
                     Reset hidden defaults
@@ -768,16 +830,8 @@ export default function App() {
                   {odataUrl && (
                     <>
                       <TextField size="small" value={odataUrl} sx={{ flex: 1 }} InputProps={{ readOnly: true }} />
-                      <Tooltip title="Copy OData URL">
-                        <IconButton onClick={copyOdataUrl}>
-                          <ContentCopyIcon />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Open OData URL">
-                        <IconButton onClick={openOdataUrl}>
-                          <OpenInNewIcon />
-                        </IconButton>
-                      </Tooltip>
+                      <Tooltip title="Copy OData URL"><IconButton onClick={copyOdataUrl}><ContentCopyIcon /></IconButton></Tooltip>
+                      <Tooltip title="Open OData URL"><IconButton onClick={openOdataUrl}><OpenInNewIcon /></IconButton></Tooltip>
                     </>
                   )}
                 </Stack>
@@ -796,14 +850,7 @@ export default function App() {
                   <Tooltip title="Call backend LLM to summarize selected scope">
                     <span>
                       <Button variant="contained" onClick={handleSummarize} disabled={!selectedNode || loadingAction}>
-                        {loadingAction ? (
-                          <>
-                            <CircularProgress size={18} sx={{ mr: 1 }} />
-                            Summarizing…
-                          </>
-                        ) : (
-                          "Summarize"
-                        )}
+                        {loadingAction ? (<><CircularProgress size={18} sx={{ mr: 1 }} />Summarizing…</>) : ("Summarize")}
                       </Button>
                     </span>
                   </Tooltip>
@@ -825,17 +872,11 @@ export default function App() {
                   {selectedNode ? (
                     <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(flattenPayload(selectedNode), null, 2)}</pre>
                   ) : (
-                    <Typography variant="body2" sx={{ opacity: 0.7 }}>
-                      (no selection)
-                    </Typography>
+                    <Typography variant="body2" sx={{ opacity: 0.7 }}>(no selection)</Typography>
                   )}
                 </Paper>
 
-                {error && (
-                  <Alert severity="error" sx={{ mb: 1 }}>
-                    {error}
-                  </Alert>
-                )}
+                {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
 
                 <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 1 }}>
                   <Tab value="result" label="Result" />
@@ -844,21 +885,14 @@ export default function App() {
                   <Tab value="chart" label="Balance diff chart" />
                 </Tabs>
 
+                {/* RESULT TAB */}
                 {tab === "result" && (
                   <Stack spacing={1.25}>
                     <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(theme.palette.info.light, 0.05) }}>
                       <Stack direction="row" alignItems="center" justifyContent="space-between">
-                        <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                          {summary || "(No summary yet)"}
-                        </Typography>
+                        <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{summary || "(No summary yet)"}</Typography>
                         {summary && (
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              navigator.clipboard.writeText(summary);
-                              setSnack("Summary copied");
-                            }}
-                          >
+                          <IconButton size="small" onClick={() => { navigator.clipboard.writeText(summary); setSnack("Summary copied"); }}>
                             <ContentCopyIcon fontSize="small" />
                           </IconButton>
                         )}
@@ -867,59 +901,58 @@ export default function App() {
 
                     <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
                       <Stack direction="row" alignItems="center" justifyContent="space-between">
-                        <Typography variant="body2">
-                          Column count: <b>{columnCount}</b>
-                        </Typography>
+                        <Typography variant="body2">Column count: <b>{columnCount}</b></Typography>
                         {!!columnList.length && (
-                          <Button
-                            size="small"
-                            onClick={() => {
-                              navigator.clipboard.writeText(columnList.join(","));
-                              setSnack("Column names copied");
-                            }}
-                          >
+                          <Button size="small" onClick={() => { navigator.clipboard.writeText(columnList.join(",")); setSnack("Column names copied"); }}>
                             Copy column names
                           </Button>
                         )}
                       </Stack>
                       {!!columnList.length && (
-                        <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>
-                          {columnList.join(" · ")}
-                        </Typography>
+                        <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>{columnList.join(" · ")}</Typography>
                       )}
                     </Paper>
                   </Stack>
                 )}
 
+                {/* JSON TAB */}
                 {tab === "json" && (
                   <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: "background.default" }}>
                     <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(previewRecords.map((r) => ({ ...r, children: undefined })), null, 2)}</pre>
                   </Paper>
                 )}
 
+                {/* TABLE TAB */}
                 {tab === "table" && (
                   <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
                     <Table size="small">
                       <TableHead>
-                        <TableRow>{tableColumns.map((col) => <TableCell key={col} sx={{ fontWeight: 700 }}>{col}</TableCell>)}</TableRow>
+                        <TableRow>
+                          {tableColumns.map((col) => (
+                            <TableCell key={col} sx={{ fontWeight: 700 }}>{col}</TableCell>
+                          ))}
+                        </TableRow>
                       </TableHead>
                       <TableBody>
                         {previewRecords.map((row) => (
-                          <TableRow key={row.id}>{tableColumns.map((col) => <TableCell key={col}>{String(row[col] ?? "")}</TableCell>)}</TableRow>
+                          <TableRow key={row.id}>
+                            {tableColumns.map((col) => (
+                              <TableCell key={col}>{String(row[col] ?? "")}</TableCell>
+                            ))}
+                          </TableRow>
                         ))}
                       </TableBody>
                     </Table>
                   </TableContainer>
                 )}
 
+                {/* CHART TAB */}
                 {tab === "chart" && (
                   <Paper variant="outlined" sx={{ p: 1, borderRadius: 2 }}>
                     {chartData.length === 0 ? (
-                      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                        No data to plot. Select a node to preview its subtree.
-                      </Typography>
+                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>No data to plot. Select a node to preview its subtree.</Typography>
                     ) : (
-                      <Box sx={{ width: "100%", height: 260 }}>
+                      <Box sx={{ width: '100%', height: 260 }}>
                         <ResponsiveContainer>
                           <BarChart data={chartData} layout="vertical" margin={{ top: 10, right: 20, left: 40, bottom: 10 }}>
                             <CartesianGrid strokeDasharray="3 3" />
@@ -927,7 +960,9 @@ export default function App() {
                             <YAxis dataKey="name" type="category" width={150} />
                             <ReTooltip formatter={(v) => new Intl.NumberFormat().format(v)} />
                             <Bar dataKey="diff" barSize={14}>
-                              {chartData.map((entry) => <Cell key={entry.id} fill={entry.diff >= 0 ? "#4caf50" : "#f44336"} />)}
+                              {chartData.map((entry) => (
+                                <Cell key={entry.id} fill={entry.diff >= 0 ? '#4caf50' : '#f44336'} />
+                              ))}
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>
@@ -941,7 +976,7 @@ export default function App() {
         </CardContent>
       </Card>
 
-      <Snackbar open={!!snack} autoHideDuration={2000} onClose={() => setSnack("")} message={snack} action={<IconButton size="small" color="inherit" onClick={() => setSnack("")}><CloseIcon fontSize="small" /></IconButton>} />
+      <Snackbar open={!!snack} autoHideDuration={2000} onClose={() => setSnack("")} message={snack} action={<IconButton size="small" color="inherit" onClick={() => setSnack("")}> <CloseIcon fontSize="small" /> </IconButton>} />
     </Box>
   );
 }
